@@ -1,0 +1,52 @@
+name: Build KuroDog for Windows
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'skills/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Check Rust lockfile
+        run: cargo metadata --locked --no-deps --manifest-path src-tauri/Cargo.toml
+
+      - name: Build Windows x64 app and installer
+        run: npm run tauri -- build --ci --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Collect release assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $release = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          $installer = @(Get-ChildItem -Path "$release/bundle/nsis/*-setup.exe")
+          if ($installer.Count -ne 1) { throw "Expected one Windows installer" }
+          New-Item -ItemType Directory -Path release | Out-Null
+          Copy-Item -LiteralPath "$release/KuroDog.exe" -Destination "release/KuroDog-$version-windows-x64.exe"
+          Copy-Item -LiteralPath $installer[0].FullName -Destination "release/KuroDog-$version-x64-setup.exe"
+          Copy-Item -LiteralPath LICENSE -Destination release/LICENSE.txt
+          Get-ChildItem release -Filter '*.exe' | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii release/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kurodog-windows-x64
+          path: release/
+          if-no-files-found: error
